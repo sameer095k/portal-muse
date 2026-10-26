@@ -2,11 +2,14 @@ package dev.wobsoriano.museportal.heymuse
 
 import android.app.Activity
 import android.app.ActivityManager
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -63,6 +66,43 @@ object MicPrime {
     if (activity === a) activity = null
   }
 
+  /**
+   * Packages whose foreground time priming must never interrupt. Wormhole Display (the
+   * AirPlay receiver) ends its stream the moment another activity takes the screen — it
+   * reads the focus loss as the user pressing Home — so a prime landing mid-stream kills
+   * whatever is being mirrored. Verified on-device 2026-10-26: three streams, three
+   * "Disconnecting client: home" lines, each within 30 ms of a prime launch. While one
+   * of these is in front, the wake mic simply stays as it is; priming resumes when the
+   * stream ends and something else comes to the front.
+   */
+  private val STREAMING_PACKAGES = setOf("io.github.pgodlews.wormhole")
+
+  /**
+   * The package most recently brought to the foreground, or null when usage stats are
+   * unavailable (the PACKAGE_USAGE_STATS appop not granted) — callers then keep the
+   * pre-patch behaviour rather than guessing.
+   */
+  fun foregroundPackage(context: Context): String? {
+    return try {
+      val usm = context.getSystemService(UsageStatsManager::class.java) ?: return null
+      val now = System.currentTimeMillis()
+      val events = usm.queryEvents(now - 30_000, now) ?: return null
+      val e = UsageEvents.Event()
+      var pkg: String? = null
+      while (events.hasNextEvent()) {
+        events.getNextEvent(e)
+        if (e.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND ||
+            e.eventType == UsageEvents.Event.ACTIVITY_RESUMED) pkg = e.packageName
+      }
+      pkg
+    } catch (ex: Exception) {
+      null
+    }
+  }
+
+  fun streamingForeground(context: Context): Boolean =
+      foregroundPackage(context) in STREAMING_PACKAGES
+
   private fun isForeground(context: Context): Boolean {
     val am = context.getSystemService(ActivityManager::class.java) ?: return false
     val me =
@@ -79,6 +119,10 @@ object MicPrime {
    */
   fun prime(context: Context): Boolean {
     if (isForeground(context)) return false
+    if (streamingForeground(context)) {
+      Log.i("MicPrime", "a stream is in front; not priming")
+      return false
+    }
     val l = CountDownLatch(1)
     latch = l
     return try {

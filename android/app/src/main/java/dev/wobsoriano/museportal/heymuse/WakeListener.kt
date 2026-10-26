@@ -342,6 +342,14 @@ class WakeListener(private val context: Context, private val host: WakeHost) {
     }
     zeroSamples += n
     if (zeroSamples < silenceLimit) return false
+    // While an AirPlay stream is on screen, leave the mic — and the screen — alone:
+    // recycling from here would prime, and priming takes the screen off the stream,
+    // which the receiver reads as a Home press and disconnects (see MicPrimeActivity).
+    // The record stays exactly as it is; silence recovery resumes once the stream ends.
+    if (MicPrime.streamingForeground(context)) {
+      zeroSamples = 0
+      return false
+    }
     Log.i(TAG, "the mic has read exact silence for ${zeroSamples / 16_000} s; reopening it")
     zeroSamples = 0
     silenceLimit = minOf(silenceLimit * 2, SILENCE_REOPEN_MAX)
