@@ -6,6 +6,7 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -80,13 +81,16 @@ object MicPrime {
   /**
    * The package most recently brought to the foreground, or null when usage stats are
    * unavailable (the PACKAGE_USAGE_STATS appop not granted) — callers then keep the
-   * pre-patch behaviour rather than guessing.
+   * pre-patch behaviour rather than guessing. The window is deliberately wide: a
+   * stream can sit in front for minutes without generating any new usage event, and
+   * the first version of this check looked back only 30 s — a stream that had been up
+   * 30.5 s read as "not streaming" and was killed by the next prime (2026-10-26).
    */
   fun foregroundPackage(context: Context): String? {
     return try {
       val usm = context.getSystemService(UsageStatsManager::class.java) ?: return null
       val now = System.currentTimeMillis()
-      val events = usm.queryEvents(now - 30_000, now) ?: return null
+      val events = usm.queryEvents(now - 900_000, now) ?: return null
       val e = UsageEvents.Event()
       var pkg: String? = null
       while (events.hasNextEvent()) {
@@ -100,8 +104,18 @@ object MicPrime {
     }
   }
 
-  fun streamingForeground(context: Context): Boolean =
-      foregroundPackage(context) in STREAMING_PACKAGES
+  /**
+   * True while something is streaming on screen. Two signals, either one enough: the
+   * receiver app is the foreground package (usage stats — covers a paused stream), or
+   * music-stream audio is playing on the device (real-time, no permission needed —
+   * covers the stats window missing an event). Our own spoken replies also count as
+   * music for their few seconds; standing down then is harmless.
+   */
+  fun streamingForeground(context: Context): Boolean {
+    if (foregroundPackage(context) in STREAMING_PACKAGES) return true
+    val am = context.getSystemService(AudioManager::class.java) ?: return false
+    return am.isMusicActive
+  }
 
   private fun isForeground(context: Context): Boolean {
     val am = context.getSystemService(ActivityManager::class.java) ?: return false
@@ -120,7 +134,7 @@ object MicPrime {
   fun prime(context: Context): Boolean {
     if (isForeground(context)) return false
     if (streamingForeground(context)) {
-      Log.i("MicPrime", "a stream is in front; not priming")
+      Log.i("MicPrime", "streaming in front (fg=${foregroundPackage(context)}); not priming")
       return false
     }
     val l = CountDownLatch(1)
