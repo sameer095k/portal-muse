@@ -82,7 +82,7 @@ class GattPeripheral(private val context: Context, private val events: BleEvents
   private fun start(spec: Advertisement) {
     teardown()
     val mySession = ++session
-    if (Build.VERSION.SDK_INT != Build.VERSION_CODES.P) return fail("pairing needs Android 9")
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return fail("pairing needs Android 9")
     val adapter = adapter ?: return fail("no Bluetooth adapter")
     if (!adapter.isEnabled) {
       Log.i(TAG, "enabling Bluetooth")

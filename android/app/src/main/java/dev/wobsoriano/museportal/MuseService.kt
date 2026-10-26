@@ -8,6 +8,8 @@ import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
 import dev.wobsoriano.museportal.overlay.OverlayBar
 
@@ -28,7 +30,16 @@ class MuseService : Service() {
             .setContentTitle("Muse is running")
             .setContentIntent(open)
             .build()
-    startForeground(NOTIFICATION_ID, notification)
+    // Declare the microphone foreground-service type at runtime too (the manifest
+    // carries the same declaration). Without it, on API 29+ a foreground service
+    // does not qualify for background microphone access: any AudioRecord the wake
+    // listener opens while another app is resumed starts silenced and reads zeros.
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      startForeground(
+          NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+    } else {
+      startForeground(NOTIFICATION_ID, notification)
+    }
     muse.start()
     overlay = OverlayBar(this, muse.state, avatars.load, onClose = muse::dismiss).also { it.start() }
   }

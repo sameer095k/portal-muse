@@ -13,6 +13,7 @@ import android.media.AudioRecordingConfiguration
 import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import dev.wobsoriano.museportal.audio.Capture
 import dev.wobsoriano.museportal.audio.Microphone
@@ -210,8 +211,21 @@ class WakeListener(private val context: Context, private val host: WakeHost) {
         }
   }
 
-  @SuppressLint("MissingPermission")
+  /**
+   * Opens the wake mic. A record opened while this app has no resumed activity is born
+   * silenced on this Portal (see [MicPrimeActivity]), so when the app is in the
+   * background, prime first: bring the invisible activity up, open the mic under it,
+   * then let the activity go.
+   */
   private fun openMic(): String? {
+    val primed = MicPrime.prime(context)
+    val error = openMicNow()
+    if (primed) MicPrime.release()
+    return error
+  }
+
+  @SuppressLint("MissingPermission")
+  private fun openMicNow(): String? {
     val minBuf = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
     if (minBuf <= 0) return "The microphone is not available"
     val rec =
@@ -242,6 +256,7 @@ class WakeListener(private val context: Context, private val host: WakeHost) {
       mic = rec
       micOpen = true
     }
+    micOpenedAtMs = SystemClock.uptimeMillis()
     recognizer?.let { restart(it) }
     return null
   }
@@ -250,6 +265,7 @@ class WakeListener(private val context: Context, private val host: WakeHost) {
     val rec = mic ?: return
     runCatching { rec.stop() }
     rec.release()
+    micOpenedAtMs = 0L
     synchronized(micLock) {
       mic = null
       micOpen = false
@@ -301,6 +317,8 @@ class WakeListener(private val context: Context, private val host: WakeHost) {
   private var levelFrom = 0L
   private var zeroSamples = 0L
   private var silenceLimit = SILENCE_REOPEN
+  /** When the current mic record was opened (uptime clock); 0 while the mic is closed. */
+  private var micOpenedAtMs = 0L
 
   /**
    * The Portal's audio policy silences an app's recording when its screen leaves the foreground, and
@@ -312,6 +330,14 @@ class WakeListener(private val context: Context, private val host: WakeHost) {
     if (chunkPeak > 0) {
       zeroSamples = 0
       silenceLimit = SILENCE_REOPEN
+      return false
+    }
+    // A fresh record gets a settling window before silence recovery may recycle it.
+    // With priming (see openMic) a record opened in the background is audible, but in a
+    // quiet room sparse ticks keep resetting the limit above to its 2 s floor, which
+    // would otherwise re-prime and re-open the mic every couple of seconds all night.
+    if (SystemClock.uptimeMillis() - micOpenedAtMs < MIC_SETTLE_MS) {
+      zeroSamples = 0
       return false
     }
     zeroSamples += n
@@ -380,6 +406,8 @@ class WakeListener(private val context: Context, private val host: WakeHost) {
     private const val LEVEL_EVERY = 60 * 16_000L
     private const val SILENCE_REOPEN = 2 * 16_000L
     private const val SILENCE_REOPEN_MAX = 64 * 16_000L
+    /** A freshly opened record is exempt from silence-reopen recycling for this long. */
+    private const val MIC_SETTLE_MS = 10_000L
     private const val RATE = 16_000
     private const val CHUNK = RATE / 10
     /** Four seconds: room for the audio that arrives while the model loads. */

@@ -36,7 +36,20 @@
       </intent-filter>
     </activity>
 
-    <service android:name=".MuseService" android:exported="false" />
+    <service
+        android:name=".MuseService"
+        android:exported="false"
+        android:foregroundServiceType="microphone" />
+
+    <!-- Invisible: resumed for a moment so the wake mic can be opened in front. -->
+    <activity
+        android:name=".heymuse.MicPrimeActivity"
+        android:exported="false"
+        android:launchMode="singleInstance"
+        android:taskAffinity=""
+        android:excludeFromRecents="true"
+        android:noHistory="true"
+        android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
     <receiver android:name=".BootReceiver" android:exported="true">
       <intent-filter>
