@@ -33,8 +33,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -129,9 +131,12 @@ class OverlayBar(
           setViewTreeSavedStateRegistryOwner(o)
           setContent { MuseTheme { Bar() } }
         }
+    // The window spans the full display width and the card caps itself at BAR_WIDTH_DP
+    // inside the composable. A fixed 880dp-wide window is wider than the portrait
+    // screen (800px), which pushed the close button off the right edge in portrait.
     val params =
         WindowManager.LayoutParams(
-                ((BAR_WIDTH_DP + 32) * context.resources.displayMetrics.density).toInt(),
+                WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
@@ -174,9 +179,11 @@ class OverlayBar(
     }
     AnimatedVisibility(shown, enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut()) {
       val turn = s.ask.turnText
-      Box(Modifier.padding(top = 24.dp, start = 16.dp, end = 16.dp, bottom = 40.dp)) {
+      Box(
+          Modifier.fillMaxWidth().padding(top = 24.dp, start = 16.dp, end = 16.dp, bottom = 40.dp),
+          contentAlignment = Alignment.BottomCenter) {
         Row(
-            Modifier.width(BAR_WIDTH_DP.dp)
+            Modifier.fillMaxWidth().widthIn(max = BAR_WIDTH_DP.dp)
                 .heightIn(min = 136.dp)
                 .shadow(28.dp, GlassShape)
                 .clip(GlassShape)
