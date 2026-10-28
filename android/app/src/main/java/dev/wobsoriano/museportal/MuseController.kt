@@ -393,7 +393,8 @@ class MuseController(private val context: Context) {
     }
   }
 
-  private fun currentConfig() = CoreConfig(settings.name, settings.sdkToken, network.snapshot().ssid)
+  private fun currentConfig() =
+      CoreConfig(settings.name, settings.sdkToken, network.snapshot().ssid, commands = portalCommands)
 
   private fun step(input: AskInput, skipMs: Int = 0) {
     var effect: AskEffect? = null
