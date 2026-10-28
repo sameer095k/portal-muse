@@ -88,6 +88,17 @@ class SilenceRecoveryTest {
   }
 
   @Test
+  fun theDeadPhaseIsVisibleToCallers() {
+    val d = Drive()
+    assertFalse(d.r.inDeadPhase)
+    assertEquals(1, d.feed(0, 34))
+    assertTrue(d.r.inDeadPhase)
+    // The same real audio that ends the phase flips the flag back.
+    assertEquals(0, d.feed(LOUD, 3))
+    assertFalse(d.r.inDeadPhase)
+  }
+
+  @Test
   fun aForegroundChangeAttemptsOnlyWhenTheFeedIsFlat() {
     val d = Drive().settled()
     assertFalse(d.r.onForegroundChange(d.now))
