@@ -61,7 +61,7 @@ class WakeListener(private val context: Context, private val host: WakeHost) {
   private var facts = WakeFacts()
   private var mic: AudioRecord? = null
   /** The audio source the live record was opened with; names it in the peak log lines. */
-  private var micSource: Int = SourceSweep.HOME
+  private var micSource: Int = WakeMicSource.PRIMARY
   private var model: Model? = null
   private var recognizer: Recognizer? = null
   private var download: Thread? = null
@@ -229,30 +229,32 @@ class WakeListener(private val context: Context, private val host: WakeHost) {
   private fun openMicNow(): String? {
     val minBuf = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
     if (minBuf <= 0) return "The microphone is not available"
-    val wanted = sweep.current
-    var used = wanted
-    var outcome = openRecorder(wanted, minBuf)
-    if (outcome is OpenOutcome.Failed && wanted != SourceSweep.HOME) {
-      // A sweep source this device cannot open at all (an unsupported UNPROCESSED, say) must not
-      // wedge the listener in its Failed state: fall back to the home source for this open. The
-      // rotation has still advanced, so the next dead-phase reopen tries the following source.
-      Log.i(TAG, "source sweep: ${SourceSweep.nameOf(wanted)} would not open (${outcome.reason}); " +
-          "using ${SourceSweep.nameOf(SourceSweep.HOME)}")
-      used = SourceSweep.HOME
-      outcome = openRecorder(used, minBuf)
-    }
-    val rec =
-        when (outcome) {
-          is OpenOutcome.Opened -> outcome.rec
-          is OpenOutcome.Failed -> return outcome.reason
+    // The mic lives on VOICE_COMMUNICATION (see WakeMicSource); CAMCORDER and MIC are only
+    // fallbacks for a record that will not open at all, tried in order until one opens.
+    var rec: AudioRecord? = null
+    var used = WakeMicSource.PRIMARY
+    var failure: String? = null
+    for (source in WakeMicSource.OPEN_ORDER) {
+      when (val outcome = openRecorder(source, minBuf)) {
+        is OpenOutcome.Opened -> {
+          rec = outcome.rec
+          used = source
+          break
         }
-    ownSessions += rec.audioSessionId
+        is OpenOutcome.Failed -> {
+          Log.i(TAG, "${WakeMicSource.nameOf(source)} would not open (${outcome.reason})")
+          failure = outcome.reason
+        }
+      }
+    }
+    val record = rec ?: return failure ?: "The microphone is not available"
+    ownSessions += record.audioSessionId
     synchronized(micLock) {
-      mic = rec
+      mic = record
       micOpen = true
     }
     micSource = used
-    Log.i(TAG, "source sweep: opened ${SourceSweep.nameOf(used)}")
+    Log.i(TAG, "opened ${WakeMicSource.nameOf(used)}")
     recovery.onMicOpened(SystemClock.uptimeMillis())
     recognizer?.let { restart(it) }
     return null
@@ -349,8 +351,6 @@ class WakeListener(private val context: Context, private val host: WakeHost) {
   private var levelFrom = 0L
   /** Decides when a silenced mic is reopened; fed every decoded chunk and foreground change. */
   private val recovery = SilenceRecovery()
-  /** Rotates the mic's audio source across dead-phase reopens (the v11 sweep). */
-  private val sweep = SourceSweep()
 
   /**
    * Reopens the mic (priming it first, via [openMic]) when [SilenceRecovery] says a reopen is
@@ -366,9 +366,6 @@ class WakeListener(private val context: Context, private val host: WakeHost) {
       return false
     }
     Log.i(TAG, "reopening the mic: $reason")
-    // A reopen here is always for a flat or dead feed, so it is a sweep step: the record that
-    // replaces this one opens on the next source in the rotation (see SourceSweep).
-    sweep.advance()
     closeMic()
     reconcile()
     return true
@@ -413,18 +410,11 @@ class WakeListener(private val context: Context, private val host: WakeHost) {
     levelPeak = maxOf(levelPeak, chunkPeak)
     val nowMs = SystemClock.uptimeMillis()
     if (pollForeground(nowMs)) return
-    val wasDead = recovery.inDeadPhase
     val reopenDue = recovery.onChunk(chunkPeak, n * 1000L / RATE, nowMs)
-    if (wasDead && !recovery.inDeadPhase) {
-      // Real audio just ended the dead phase on the source the live record was opened with —
-      // the money line of the sweep. The mic goes back to the home source for good.
-      Log.i(TAG, "source sweep: ${SourceSweep.nameOf(micSource)} DELIVERS AUDIO")
-      sweep.reset()
-    }
     if (reopenDue && reopen("the mic reads exact silence")) return
     if (samples - levelFrom >= LEVEL_EVERY) {
       // A level of 0 means the system is handing us silence, as Android does to a mic it has idled.
-      Log.i(TAG, "mic peak $levelPeak over ${(samples - levelFrom) / 16_000} s (source ${SourceSweep.nameOf(micSource)})")
+      Log.i(TAG, "mic peak $levelPeak over ${(samples - levelFrom) / 16_000} s (source ${WakeMicSource.nameOf(micSource)})")
       levelPeak = 0
       levelFrom = samples
     }
