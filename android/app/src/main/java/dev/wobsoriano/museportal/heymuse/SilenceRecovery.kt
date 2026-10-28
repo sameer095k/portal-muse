@@ -37,6 +37,14 @@ class SilenceRecovery(
   private enum class Phase { LISTENING, DEAD }
 
   private var phase = Phase.LISTENING
+
+  /**
+   * True while the feed is considered cut and reopens are being attempted. Read by callers
+   * around [onChunk] to spot the chunk on which real audio ends the dead phase.
+   */
+  val inDeadPhase: Boolean
+    get() = phase == Phase.DEAD
+
   private var silentRunMs = 0L
   private var healthyRunMs = 0L
   private var settleUntilMs = Long.MIN_VALUE
