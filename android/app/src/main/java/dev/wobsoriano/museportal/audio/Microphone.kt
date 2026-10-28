@@ -30,7 +30,11 @@ object Microphone {
   fun record(skipMs: Int, shouldStop: () -> Boolean, waitForSpeechMs: Int = MAX_MS, onLevel: (Float) -> Unit): Capture {
     val rec =
         try {
-          open(MediaRecorder.AudioSource.VOICE_RECOGNITION) ?: open(MediaRecorder.AudioSource.MIC)
+          // Same order as the wake mic (see WakeMicSource): the communications path is the
+          // one the Portal's presence gate leaves open, camcorder next, plain mic last.
+          open(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+              ?: open(MediaRecorder.AudioSource.CAMCORDER)
+              ?: open(MediaRecorder.AudioSource.MIC)
         } catch (e: SecurityException) {
           return Capture.Failed("Microphone permission is off")
         } catch (e: IllegalArgumentException) {
