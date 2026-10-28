@@ -3,6 +3,7 @@ package dev.wobsoriano.muse.core
 import dev.wobsoriano.muse.AskInput
 import dev.wobsoriano.muse.BusyException
 import dev.wobsoriano.muse.Client
+import dev.wobsoriano.muse.Command
 import dev.wobsoriano.muse.ConnState
 import dev.wobsoriano.muse.Credentials
 import dev.wobsoriano.muse.FileStore
@@ -44,7 +45,13 @@ import kotlinx.coroutines.selects.select
 import okhttp3.OkHttpClient
 
 /** What the app hands the core: the name the Muse app shows, the developer's mgst_ token, and the Wi-Fi network the device is on. */
-data class CoreConfig(val name: String, val sdkToken: String, val ssid: String) {
+data class CoreConfig(
+    val name: String,
+    val sdkToken: String,
+    val ssid: String,
+    /** The commands Muse may run on this device. The app's set is static, so it is not part of [Plan]: changing it alone never restarts the client. */
+    val commands: List<Command> = emptyList(),
+) {
   override fun toString() = "CoreConfig(name=$name, sdkToken=${if (sdkToken.isEmpty()) "<empty>" else "<set>"}, ssid=$ssid)"
 }
 
@@ -432,6 +439,7 @@ class MuseCore(
         Client(
             dev.wobsoriano.muse.Config(
                 store = ClientStore(r),
+                commands = cfg.commands,
                 displayName = cfg.name,
                 version = version,
                 sdkToken = cfg.sdkToken,
