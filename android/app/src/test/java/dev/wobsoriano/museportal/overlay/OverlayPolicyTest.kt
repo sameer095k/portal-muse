@@ -38,4 +38,19 @@ class OverlayPolicyTest {
   fun aFailureDoesNotHoldTheBar() {
     assertEquals(false, overlayWanted(AskState.Failed("no"), speaking = false, inFront = false))
   }
+
+  @Test
+  fun aSettledAnswerGoesUnwantedOnceSpeechEndsSoTheBarAutoHides() {
+    // The turn is over: the answer settled and nothing is being spoken, so the bar
+    // stops being wanted and the linger in OverlayBar slides it away on its own.
+    assertEquals(false, overlayWanted(answered, speaking = false, inFront = false))
+    assertEquals(false, overlayWanted(AskState.Idle, speaking = false, inFront = false))
+  }
+
+  @Test
+  fun theBarStaysWhileATurnIsBusy() {
+    assertEquals(true, overlayWanted(AskState.Recording(0.2f), speaking = false, inFront = false))
+    assertEquals(true, overlayWanted(AskState.Sending("a1"), speaking = false, inFront = false))
+    assertEquals(true, overlayWanted(answered, speaking = true, inFront = false))
+  }
 }
