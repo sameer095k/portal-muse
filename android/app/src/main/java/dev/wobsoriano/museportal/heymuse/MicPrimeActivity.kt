@@ -34,6 +34,10 @@ import java.util.concurrent.TimeUnit
 class MicPrimeActivity : Activity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    // The theme is already translucent and there is no content view, so nothing of this
+    // window itself can draw; the default activity transition is the only part of a prime
+    // that still could. Turn it off so a prime is just the dashboard's own redraw.
+    overridePendingTransition(0, 0)
     MicPrime.attach(this)
   }
 
@@ -86,11 +90,11 @@ object MicPrime {
    * the first version of this check looked back only 30 s — a stream that had been up
    * 30.5 s read as "not streaming" and was killed by the next prime (2026-10-26).
    */
-  fun foregroundPackage(context: Context): String? {
+  fun foregroundPackage(context: Context, windowMs: Long = 900_000): String? {
     return try {
       val usm = context.getSystemService(UsageStatsManager::class.java) ?: return null
       val now = System.currentTimeMillis()
-      val events = usm.queryEvents(now - 900_000, now) ?: return null
+      val events = usm.queryEvents(now - windowMs, now) ?: return null
       val e = UsageEvents.Event()
       var pkg: String? = null
       while (events.hasNextEvent()) {
@@ -152,6 +156,9 @@ object MicPrime {
 
   fun release() {
     val a = activity ?: return
-    main.post { a.finish() }
+    main.post {
+      a.finish()
+      a.overridePendingTransition(0, 0)
+    }
   }
 }
