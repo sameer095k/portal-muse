@@ -256,7 +256,7 @@ class WakeListener(private val context: Context, private val host: WakeHost) {
       mic = rec
       micOpen = true
     }
-    micOpenedAtMs = SystemClock.uptimeMillis()
+    recovery.onMicOpened(SystemClock.uptimeMillis())
     recognizer?.let { restart(it) }
     return null
   }
@@ -265,7 +265,6 @@ class WakeListener(private val context: Context, private val host: WakeHost) {
     val rec = mic ?: return
     runCatching { rec.stop() }
     rec.release()
-    micOpenedAtMs = 0L
     synchronized(micLock) {
       mic = null
       micOpen = false
@@ -315,47 +314,50 @@ class WakeListener(private val context: Context, private val host: WakeHost) {
 
   private var levelPeak = 0
   private var levelFrom = 0L
-  private var zeroSamples = 0L
-  private var silenceLimit = SILENCE_REOPEN
-  /** When the current mic record was opened (uptime clock); 0 while the mic is closed. */
-  private var micOpenedAtMs = 0L
+  /** Decides when a silenced mic is reopened; fed every decoded chunk and foreground change. */
+  private val recovery = SilenceRecovery()
 
   /**
-   * The Portal's audio policy silences an app's recording when its screen leaves the foreground, and
-   * the recording then reads exact zeros, which no real room produces. A mic opened again in the
-   * background is heard, so after [silenceLimit] of zeros the mic is reopened. A reopen that is
-   * still silent doubles the wait, so a mic that stays silenced isn't reopened in a tight loop.
+   * Reopens the mic (priming it first, via [openMic]) when [SilenceRecovery] says a reopen is
+   * due. While an AirPlay stream is on screen, leave the mic — and the screen — alone:
+   * recycling from here would prime, and priming takes the screen off the stream, which the
+   * receiver reads as a Home press and disconnects (see MicPrimeActivity). The attempt is
+   * deferred instead; the stream ending is a foreground change, which retries a dead mic.
+   * Returns true when the mic was actually recycled, so the caller drops the current chunk.
    */
-  private fun reopenedForSilence(chunkPeak: Int, n: Int): Boolean {
-    if (chunkPeak > 0) {
-      zeroSamples = 0
-      silenceLimit = SILENCE_REOPEN
-      return false
-    }
-    // A fresh record gets a settling window before silence recovery may recycle it.
-    // With priming (see openMic) a record opened in the background is audible, but in a
-    // quiet room sparse ticks keep resetting the limit above to its 2 s floor, which
-    // would otherwise re-prime and re-open the mic every couple of seconds all night.
-    if (SystemClock.uptimeMillis() - micOpenedAtMs < MIC_SETTLE_MS) {
-      zeroSamples = 0
-      return false
-    }
-    zeroSamples += n
-    if (zeroSamples < silenceLimit) return false
-    // While an AirPlay stream is on screen, leave the mic — and the screen — alone:
-    // recycling from here would prime, and priming takes the screen off the stream,
-    // which the receiver reads as a Home press and disconnects (see MicPrimeActivity).
-    // The record stays exactly as it is; silence recovery resumes once the stream ends.
+  private fun reopen(reason: String): Boolean {
     if (MicPrime.streamingForeground(context)) {
-      zeroSamples = 0
+      recovery.defer(SystemClock.uptimeMillis())
       return false
     }
-    Log.i(TAG, "the mic has read exact silence for ${zeroSamples / 16_000} s; reopening it")
-    zeroSamples = 0
-    silenceLimit = minOf(silenceLimit * 2, SILENCE_REOPEN_MAX)
+    Log.i(TAG, "reopening the mic: $reason")
     closeMic()
     reconcile()
     return true
+  }
+
+  private var fgPollChunks = 0
+  private var lastForegroundPkg: String? = null
+
+  /**
+   * Watches for the foreground app changing — the moment the Portal's audio policy applies
+   * its mic cut — by polling usage stats once a second while listening. Transitions to or
+   * from this app are ignored: our own activities (the prime, the ask screen) coming and
+   * going says nothing about the cut, and a record opened under our own resumed activity is
+   * audible anyway. Returns true when the mic was recycled.
+   */
+  private fun pollForeground(nowMs: Long): Boolean {
+    if (++fgPollChunks < FG_POLL_CHUNKS) return false
+    fgPollChunks = 0
+    val pkg = MicPrime.foregroundPackage(context, FG_WINDOW_MS) ?: return false
+    val prev = lastForegroundPkg
+    lastForegroundPkg = pkg
+    if (prev == null || prev == pkg) return false
+    val me = context.packageName
+    if (prev == me || pkg == me) return false
+    Log.i(TAG, "foreground changed: $prev -> $pkg")
+    if (!recovery.onForegroundChange(nowMs)) return false
+    return reopen("the foreground changed while the mic reads silence")
   }
 
   /** Decodes one chunk of audio, and turns a wake into an ask. */
@@ -371,7 +373,9 @@ class WakeListener(private val context: Context, private val host: WakeHost) {
     var chunkPeak = 0
     for (i in 0 until n) chunkPeak = maxOf(chunkPeak, kotlin.math.abs(chunk[i].toInt()))
     levelPeak = maxOf(levelPeak, chunkPeak)
-    if (reopenedForSilence(chunkPeak, n)) return
+    val nowMs = SystemClock.uptimeMillis()
+    if (pollForeground(nowMs)) return
+    if (recovery.onChunk(chunkPeak, n * 1000L / RATE, nowMs) && reopen("the mic reads exact silence")) return
     if (samples - levelFrom >= LEVEL_EVERY) {
       // A level of 0 means the system is handing us silence, as Android does to a mic it has idled.
       Log.i(TAG, "mic peak $levelPeak over ${(samples - levelFrom) / 16_000} s")
@@ -412,10 +416,10 @@ class WakeListener(private val context: Context, private val host: WakeHost) {
   companion object {
     private const val TAG = "MuseWake"
     private const val LEVEL_EVERY = 60 * 16_000L
-    private const val SILENCE_REOPEN = 2 * 16_000L
-    private const val SILENCE_REOPEN_MAX = 64 * 16_000L
-    /** A freshly opened record is exempt from silence-reopen recycling for this long. */
-    private const val MIC_SETTLE_MS = 10_000L
+    /** Chunks (100 ms each) between foreground polls while listening: about once a second. */
+    private const val FG_POLL_CHUNKS = 10
+    /** Usage-events window for a foreground poll; wider than the poll gap, so no event is missed. */
+    private const val FG_WINDOW_MS = 2_500L
     private const val RATE = 16_000
     private const val CHUNK = RATE / 10
     /** Four seconds: room for the audio that arrives while the model loads. */
